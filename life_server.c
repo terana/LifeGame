@@ -2,7 +2,7 @@
 #include "mpi.h"
 
 #include "error.h"
-#include "worker.h"
+#include "worker_settings.h"
 
 #define WIDTH 5
 #define HEIGHT 5
