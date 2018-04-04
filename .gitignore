@@ -1,0 +1,12 @@
+# Executable files
+*.out
+server
+client
+worker
+
+# Other files
+*.o
+*.swp
+
+# macOS files
+.DS_Store
