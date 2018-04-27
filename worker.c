@@ -1,16 +1,14 @@
 #include "mpi.h" 
+#include <string.h>
+
 #include "error.h"
-#include "worker_settings.h"
+#include "life_game.h"
 
 typedef struct {
-    MPI_Comm serverComm;
-    MPI_Comm clientComm;
+    CommunicationConstants server;
+    CommunicationConstants client;
     char port[MPI_MAX_PORT_NAME];
-    int serverSize;
-    int serverRank;
     int numOfWorkers;
-    int clientRank;
-    int clientTag;
 } ManagerConstants;
 
 typedef struct {
@@ -21,16 +19,18 @@ typedef struct {
 } RankConstants;
 
 void GetManagerConstants(ManagerConstants* mpi) {
-    int err;
-    err = MPI_Comm_get_parent(&mpi->serverComm); 
+    memset(mpi, 0, sizeof(ManagerConstants));
+
+    int err, serverSize;
+    err = MPI_Comm_get_parent(&(mpi->server.comm)); 
     CrashIfError(err, "MPI_Comm_get_parent");
-    Assert(mpi->serverComm != MPI_COMM_NULL, "No server");
+    Assert(mpi->server.comm != MPI_COMM_NULL, "No server");
 
-    err = MPI_Comm_remote_size(mpi->serverComm, &mpi->serverSize); 
+    err = MPI_Comm_remote_size(mpi->server.comm, &serverSize); 
     CrashIfError(err, "MPI_Comm_remote_size");
-    Assert(mpi->serverSize == 1, "Too many servers");
+    Assert(serverSize == 1, "Too many servers");
 
-    mpi->serverRank = 0;
+    mpi->server.rank = 0;
 
     err = MPI_Comm_size(MPI_COMM_WORLD, &mpi->numOfWorkers);
     CrashIfError(err,  "MPI_Comm_size");
@@ -39,20 +39,17 @@ void GetManagerConstants(ManagerConstants* mpi) {
     err = MPI_Open_port(MPI_INFO_NULL, mpi->port); 
     CrashIfError(err, "MPI_Open_port");
 
-    err = MPI_Send((void *) mpi->port, MPI_MAX_PORT_NAME, MPI_CHAR, 0, 1, mpi->serverComm);
+    err = MPI_Send((void *) mpi->port, MPI_MAX_PORT_NAME, MPI_CHAR, mpi->server.rank, mpi->server.tag, mpi->server.comm);
     CrashIfError(err, "MPI_Send");
 
-    err = MPI_Comm_accept(mpi->port, MPI_INFO_NULL, 0, MPI_COMM_SELF, &(mpi->clientComm)); 
+    err = MPI_Comm_accept(mpi->port, MPI_INFO_NULL, 0, MPI_COMM_SELF, &(mpi->client.comm)); 
     CrashIfError(err, "MPI_Comm_accept");
     printf("Manager accepted connection\n");
 }
 
-void fillClientInfo(ManagerConstants *mpi, const MPI_Status *status) {
-    mpi->clientRank = status->MPI_SOURCE;
-    mpi->clientTag  = status->MPI_TAG;
-}
-
 void GetRankConstants(RankConstants* mpi) {
+    memset(mpi, 0, sizeof(RankConstants));
+
     int err, numOfWorkers;
     err =  MPI_Comm_rank(MPI_COMM_WORLD, &mpi->myRank);
     CrashIfError(err,  "MPI_Comm_rank");
@@ -64,20 +61,6 @@ void GetRankConstants(RankConstants* mpi) {
     mpi->nextRank = mpi->myRank == numOfWorkers - 1 ? MPI_PROC_NULL : mpi->myRank + 1;
 
     mpi->managerRank = 0;
-}
-
-void PrintPolygon(const int** polygon, int high, int width) {
-    int i, j;
-    char * str = malloc(high * (width + 1) + 1);
-    char *cursor = str;
-    for (i = 0; i < high; ++i) {
-        for (j = 0; j < width; ++j) {
-            polygon[i][j] ? sprintf(cursor++, "*") : sprintf(cursor++, "o");
-        }
-        sprintf(cursor++, "\n");
-    }
-    printf("%s\n", str);
-    free(str);
 }
 
 int NewState(int currState, int potential) {
@@ -103,15 +86,15 @@ int CalculatePotential(int i, int j, const int** polygon, int width) {
     return p; 
 } 
 
-void CalculateNewPolygon(const WorkerSettings *settings, const int** polygon, int** newPolygon) {
+void CalculateNewPolygon(const Size *size, const int** polygon, int** newPolygon) {
     int i, j;
-    for (j = 0; j < settings->width; ++j) {
+    for (j = 0; j < size->width; ++j) {
         newPolygon[0][j] = polygon[0][j];
-        newPolygon[settings->height - 1][j] = polygon[settings->height - 1][j];
+        newPolygon[size->height - 1][j] = polygon[size->height - 1][j];
     }
-    for (i = 1; i < settings->height - 1; ++i) {
-        for (j = 0; j < settings->width; ++j) {
-            newPolygon[i][j] = NewState(polygon[i][j], CalculatePotential(i, j, polygon, settings->width));
+    for (i = 1; i < size->height - 1; ++i) {
+        for (j = 0; j < size->width; ++j) {
+            newPolygon[i][j] = NewState(polygon[i][j], CalculatePotential(i, j, polygon, size->width));
         }
     }
 }
@@ -122,26 +105,26 @@ void Swap(int*** polygon1, int*** polygon2) {
     *polygon2 = tmp;
 }
 
-void ExchangeBorders(const RankConstants *mpi, const WorkerSettings *settings, int **polygon) {
+void ExchangeBorders(const RankConstants *mpi, const Size *size, int **polygon) {
     int status;
     MPI_Status mpiStatus;
     if (mpi->myRank % 2) {
-        status =  MPI_Sendrecv((void *) polygon[1], settings->width, MPI_INT, mpi->prevRank, 2, 
-                            (void *) polygon[0], settings->width, MPI_INT, mpi->prevRank, 2, MPI_COMM_WORLD, &mpiStatus);
+        status =  MPI_Sendrecv((void *) polygon[1], size->width, MPI_INT, mpi->prevRank, 2, 
+                            (void *) polygon[0], size->width, MPI_INT, mpi->prevRank, 2, MPI_COMM_WORLD, &mpiStatus);
         CrashIfError(status, "MPI_Sendrecv");
 
-        status =  MPI_Sendrecv((void *) (polygon[settings->height - 2]), settings->width, MPI_INT, mpi->nextRank, 1, 
-                            (void *) (polygon[settings->height - 1]), settings->width, MPI_INT, mpi->nextRank, 1,
+        status =  MPI_Sendrecv((void *) (polygon[size->height - 2]), size->width, MPI_INT, mpi->nextRank, 1, 
+                            (void *) (polygon[size->height - 1]), size->width, MPI_INT, mpi->nextRank, 1,
                             MPI_COMM_WORLD, &mpiStatus);
         CrashIfError(status, "MPI_Sendrecv");
     } else {
-        status =  MPI_Sendrecv((void *) (polygon[settings->height - 2]), settings->width, MPI_INT, mpi->nextRank, 2, 
-                            (void *) (polygon[settings->height - 1]), settings->width, MPI_INT, mpi->nextRank, 2,
+        status =  MPI_Sendrecv((void *) (polygon[size->height - 2]), size->width, MPI_INT, mpi->nextRank, 2, 
+                            (void *) (polygon[size->height - 1]), size->width, MPI_INT, mpi->nextRank, 2,
                             MPI_COMM_WORLD, &mpiStatus);
         CrashIfError(status, "MPI_Sendrecv");
 
-        status =  MPI_Sendrecv((void *) polygon[1], settings->width, MPI_INT, mpi->prevRank, 1, 
-                            (void *) polygon[0], settings->width, MPI_INT, mpi->prevRank, 1,
+        status =  MPI_Sendrecv((void *) polygon[1], size->width, MPI_INT, mpi->prevRank, 1, 
+                            (void *) polygon[0], size->width, MPI_INT, mpi->prevRank, 1,
                             MPI_COMM_WORLD, &mpiStatus);
         CrashIfError(status, "MPI_Sendrecv");
     }
@@ -149,36 +132,36 @@ void ExchangeBorders(const RankConstants *mpi, const WorkerSettings *settings, i
 
 void WorkerRoutine(RankConstants *rankConst) {
     int i, err;
-    WorkerSettings settings;
+    Size size;
 
     int message;
     int continueFlag = 1;
 
     MPI_Status mpiStatus;
     
-    err = MPI_Recv((void *) &settings, 2, MPI_INT, rankConst->managerRank, 1, MPI_COMM_WORLD, &mpiStatus);
+    err = MPI_Recv((void *) &size, 2, MPI_INT, rankConst->managerRank, 1, MPI_COMM_WORLD, &mpiStatus);
     CrashIfError(err, "MPI_Recv");
  
-    int **polygon = (int **) malloc((settings.height) * sizeof(int *));
-    int **newPolygon = (int **) malloc((settings.height) * sizeof(int *));
+    int **polygon = (int **) malloc((size.height) * sizeof(int *));
+    int **newPolygon = (int **) malloc((size.height) * sizeof(int *));
 
-    for (i = 0; i < settings.height; ++i) {
-        polygon[i] = malloc(settings.width * sizeof(int));
-        newPolygon[i] = malloc(settings.width * sizeof(int));
+    for (i = 0; i < size.height; ++i) {
+        polygon[i] = malloc(size.width * sizeof(int));
+        newPolygon[i] = malloc(size.width * sizeof(int));
 
-        err = MPI_Recv((void *) polygon[i], settings.width, MPI_INT, rankConst->managerRank, 1, MPI_COMM_WORLD, &mpiStatus);
+        err = MPI_Recv((void *) polygon[i], size.width, MPI_INT, rankConst->managerRank, 1, MPI_COMM_WORLD, &mpiStatus);
         CrashIfError(err, "MPI_Recv");
     }
 
-    PrintPolygon((const int **) polygon, settings.height, settings.width);
+    PrintPolygon((const int **) polygon, size.height, size.width);
 
     while(continueFlag) {
-        CalculateNewPolygon(&settings, (const int **) polygon, newPolygon);
+        CalculateNewPolygon(&size, (const int **) polygon, newPolygon);
         Swap(&polygon, &newPolygon);
-        ExchangeBorders(rankConst, &settings, polygon);
+        ExchangeBorders(rankConst, &size, polygon);
 
         printf("proc %d\n", rankConst->myRank);
-        PrintPolygon((const int **) polygon, settings.height, settings.width);
+        PrintPolygon((const int **) polygon, size.height, size.width);
 
         err = MPI_Bcast((void*) &message, 1, MPI_INT, 0, MPI_COMM_WORLD);
         CrashIfError(err, "MPI_Bcast");
@@ -188,8 +171,8 @@ void WorkerRoutine(RankConstants *rankConst) {
                 continueFlag = 0;
                 break;
             case SNAPSHOT:
-                for (i = 1; i < settings.height - 1; ++i) {
-                    err = MPI_Send((void *) polygon[i], settings.width, MPI_INT, rankConst->managerRank, 1, MPI_COMM_WORLD);
+                for (i = 1; i < size.height - 1; ++i) {
+                    err = MPI_Send((void *) polygon[i], size.width, MPI_INT, rankConst->managerRank, 1, MPI_COMM_WORLD);
                     CrashIfError(err, "MPI_Send");
                 }
             case CONTINUE:
@@ -199,7 +182,7 @@ void WorkerRoutine(RankConstants *rankConst) {
         }
     }
 
-    for (i = 0; i < settings.height; ++i) {
+    for (i = 0; i < size.height; ++i) {
         free(polygon[i]);
         free(newPolygon[i]);
     }
@@ -220,43 +203,43 @@ void ManagerRoutine() {
 
     GetManagerConstants(&mpi);
 
-    WorkerSettings settings;
-    err = MPI_Recv((void *) &settings, 2, MPI_INT, mpi.serverRank, 1, mpi.clientComm, &mpiStatus);
+    Size size;
+    err = MPI_Recv((void *) &size, 2, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, mpi.client.comm, &mpiStatus);
     CrashIfError(err, "MPI_Recv");
-    fillClientInfo(&mpi, &mpiStatus);
+    FillCommunicationConstants(&(mpi.client), &mpiStatus);
 
-    int **polygon = (int **) malloc((settings.height + 2) * sizeof(int *));
-    polygon[0] = calloc(settings.width, sizeof(int));
-    for (i = 1 ; i < settings.height + 1; ++i) {
-        polygon[i] = malloc(settings.width * sizeof(int));
+    int **polygon = (int **) malloc((size.height + 2) * sizeof(int *));
+    polygon[0] = calloc(size.width, sizeof(int));
+    for (i = 1 ; i < size.height + 1; ++i) {
+        polygon[i] = malloc(size.width * sizeof(int));
 
-        err = MPI_Recv((void *) polygon[i], settings.width, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, mpi.clientComm, &mpiStatus);
+        err = MPI_Recv((void *) polygon[i], size.width, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, mpi.client.comm, &mpiStatus);
         CrashIfError(err, "MPI_Recv");
     }
-    polygon[settings.height + 1] = calloc(settings.width, sizeof(int));
+    polygon[size.height + 1] = calloc(size.width, sizeof(int));
 
-    WorkerSettings workerSettings = {0, settings.width};
+    Size workerSize = {0, size.width};
     int from, j;
     for (i = 0; i < mpi.numOfWorkers; ++i) {
-        if (i < settings.height % mpi.numOfWorkers) {
-            workerSettings.height = settings.height / mpi.numOfWorkers + 1;
-            from = workerSettings.height * i;
+        if (i < size.height % mpi.numOfWorkers) {
+            workerSize.height = size.height / mpi.numOfWorkers + 1;
+            from = workerSize.height * i;
         } else {
-            workerSettings.height = settings.height / mpi.numOfWorkers;
-            from = workerSettings.height * i + settings.height % mpi.numOfWorkers;
+            workerSize.height = size.height / mpi.numOfWorkers;
+            from = workerSize.height * i + size.height % mpi.numOfWorkers;
         }
-        workerSettings.height += 2;
+        workerSize.height += 2;
 
-        err = MPI_Send((void *) &workerSettings, 2, MPI_INT, i + 1, 1, MPI_COMM_WORLD);
+        err = MPI_Send((void *) &workerSize, 2, MPI_INT, i + 1, 1, MPI_COMM_WORLD);
         CrashIfError(err, "MPI_Send");
 
-        for (j = 0; j < workerSettings.height; ++j) {
-            err = MPI_Send((void *) polygon[from + j], settings.width, MPI_INT, i + 1, 1, MPI_COMM_WORLD);
+        for (j = 0; j < workerSize.height; ++j) {
+            err = MPI_Send((void *) polygon[from + j], size.width, MPI_INT, i + 1, 1, MPI_COMM_WORLD);
             CrashIfError(err, "MPI_Send");
         }
     }
 
-    err = MPI_Irecv((void*) &serverMsg, 1, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, mpi.clientComm, &mpiRequest);
+    err = MPI_Irecv((void*) &serverMsg, 1, MPI_INT, mpi.client.rank, mpi.client.tag, mpi.client.comm, &mpiRequest);
     CrashIfError(err, "MPI_Irecv");
 
     while (continueFlag) {
@@ -279,22 +262,22 @@ void ManagerRoutine() {
                     err = MPI_Bcast((void*) &workerMsg, 1, MPI_INT, 0, MPI_COMM_WORLD);
                     CrashIfError(err, "MPI_Bcast SNAPSHOT");
                     for (i = 0; i < mpi.numOfWorkers; ++i) {
-                        if (i < settings.height % mpi.numOfWorkers) {
-                            workerSettings.height = settings.height / mpi.numOfWorkers + 1;
-                            from = workerSettings.height * i;
+                        if (i < size.height % mpi.numOfWorkers) {
+                            workerSize.height = size.height / mpi.numOfWorkers + 1;
+                            from = workerSize.height * i;
                         } else {
-                            workerSettings.height = settings.height / mpi.numOfWorkers;
-                            from = workerSettings.height * i + settings.height % mpi.numOfWorkers;
+                            workerSize.height = size.height / mpi.numOfWorkers;
+                            from = workerSize.height * i + size.height % mpi.numOfWorkers;
                         }
-                        for (j = 0; j < workerSettings.height; ++j) {
-                            err = MPI_Recv((void *) polygon[from + j], settings.width, MPI_INT, i + 1, 1, MPI_COMM_WORLD,  &mpiStatus);
+                        for (j = 0; j < workerSize.height; ++j) {
+                            err = MPI_Recv((void *) polygon[from + j], size.width, MPI_INT, i + 1, 1, MPI_COMM_WORLD,  &mpiStatus);
                             CrashIfError(err, "MPI_Recv");
                         }
                     }
-                    PrintPolygon((const int **)polygon, settings.height, settings.width);
+                    PrintPolygon((const int **)polygon, size.height, size.width);
 
-                    for (i = 1; i < settings.height + 1; ++i) {
-                        err = MPI_Send((void *) polygon[i], settings.width, MPI_INT, mpi.clientRank, mpi.clientTag, mpi.clientComm);
+                    for (i = 1; i < size.height + 1; ++i) {
+                        err = MPI_Send((void *) polygon[i], size.width, MPI_INT, mpi.client.rank, mpi.client.tag, mpi.client.comm);
                         CrashIfError(err, "MPI_Send");
                     }
                     break;
@@ -303,13 +286,13 @@ void ManagerRoutine() {
                     err = MPI_Bcast((void*) &workerMsg, 1, MPI_INT, 0, MPI_COMM_WORLD);
                     CrashIfError(1, "Unrecognised command");
             }
-            err = MPI_Irecv((void*) &serverMsg, 1, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, mpi.clientComm, &mpiRequest);
+            err = MPI_Irecv((void*) &serverMsg, 1, MPI_INT, mpi.client.rank, mpi.client.tag, mpi.client.comm, &mpiRequest);
             CrashIfError(err, "MPI_Irecv");
         }
     }
 
 
-    for (i = 0; i < settings.height + 2; ++i) {
+    for (i = 0; i < size.height + 2; ++i) {
         free(polygon[i]);
     }
     free(polygon);

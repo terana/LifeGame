@@ -5,44 +5,50 @@
 
 #include "mpi.h" 
 #include "error.h"
-#include "worker_settings.h"
-
-typedef struct {
-    char serverPort[MPI_MAX_PORT_NAME];
-    char managerPort[MPI_MAX_PORT_NAME];
-    MPI_Comm serverComm;
-    MPI_Comm managerComm;
-} MPIConstants;
+#include "life_game.h"
 
 typedef struct {
     int numOfWorkers;
-    int height;
-    int width;
+    Size size;
+    int **polygon;
 } GameSettings;
 
-void Send(int message, MPIConstants* mpi) {
-    int err = MPI_Send((void *) &message, 1, MPI_INT, 0, 1, mpi->managerComm);
+void Send(int message, CommunicationConstants* mpi) {
+    int err = MPI_Send((void *) &message, 1, MPI_INT, mpi->rank, mpi->tag, mpi->comm);
     CrashIfError(err, "MPI_Send");
 }
 
 void InitSettings(GameSettings *game) {
-    game->numOfWorkers = 5;
-    game->height = 4;
-    game->width = 4;
+    memset(game, 0, sizeof(GameSettings));
+    
+    printf("Enter polygon height and width:\n");
+    scanf("%d %d", &(game->size.height), &(game->size.width));
+
+    printf("Enter numOfWorkers:\n");
+    scanf("%d", &(game->numOfWorkers));
+
+    printf("Enter polygon:\n");
+    int i, j;
+    game->polygon = (int**) malloc(game->size.height * sizeof(int*));
+    for (i = 0; i < game->size.height; ++i) {
+        game->polygon[i] = (int *) malloc (game->size.width * sizeof(int));
+        for (j = 0; j < game->size.width; ++j) {
+            scanf("%d", &(game->polygon[i][j]));
+        }
+    }
 }
 
 int main(int argc, char *argv[]) 
 { 
-    int polygon[4][4] = {
-        {1, 1, 1, 0},
-        {1, 1, 0, 0},
-        {0, 1, 0, 1},
-        {1, 0, 1, 0}
-    };
-
     int i, err;
 
-    MPIConstants mpi;
+    CommunicationConstants manager, server;
+    //ranks and tags are set to zeroes
+    memset(&manager, 0, sizeof(CommunicationConstants));
+    memset(&server, 0, sizeof(CommunicationConstants));
+    char managerPort [MPI_MAX_PORT_NAME];
+    char serverPort [MPI_MAX_PORT_NAME];
+
     GameSettings game;
     InitSettings(&game);
 
@@ -51,52 +57,52 @@ int main(int argc, char *argv[])
     err = MPI_Init(&argc, &argv);
     CrashIfError(err, "MPI_Init");
 
-    printf("Enter port name: \n");  
-    gets(mpi.serverPort);
+    printf("Enter port name: \n");
+    scanf("%s", serverPort);
 
-    err = MPI_Comm_connect(mpi.serverPort, MPI_INFO_NULL, 0, MPI_COMM_SELF, &mpi.serverComm); 
+    err = MPI_Comm_connect(serverPort, MPI_INFO_NULL, 0, MPI_COMM_SELF, &server.comm); 
     CrashIfError(err, "MPI_Comm_connect");
     printf("Connected to server\n");
 
-    err = MPI_Send(&game.numOfWorkers, 1, MPI_INT, 0, 1, mpi.serverComm);
+    err = MPI_Send(&game.numOfWorkers, 1, MPI_INT, server.rank, server.tag, server.comm);
     CrashIfError(err, "MPI_Send");
 
-    printf("numOfWorkers\n"); 
-
-    err = MPI_Recv(mpi.managerPort, MPI_MAX_PORT_NAME, MPI_CHAR, MPI_ANY_SOURCE, MPI_ANY_TAG, mpi.serverComm, &mpiStatus);
+    err = MPI_Recv(managerPort, MPI_MAX_PORT_NAME, MPI_CHAR, server.rank, server.tag, server.comm, &mpiStatus);
     CrashIfError(err, "MPI_Recv");
 
-    err = MPI_Comm_connect(mpi.managerPort, MPI_INFO_NULL, 0, MPI_COMM_SELF, &mpi.managerComm); 
+    err = MPI_Comm_connect(managerPort, MPI_INFO_NULL, 0, MPI_COMM_SELF, &manager.comm); 
     CrashIfError(err, "MPI_Comm_connect");
     printf("Connected to manager\n");
 
-    WorkerSettings workerSettings = {game.height, game.width};
-    err = MPI_Send((void *) &workerSettings, 2, MPI_INT, 0, 1, mpi.managerComm);
+    err = MPI_Send((void *) &(game.size), 2, MPI_INT, manager.rank, manager.tag, manager.comm);
     CrashIfError(err, "MPI_Send");
 
-    printf("settings\n"); 
-
-    for (i = 0; i < game.height; ++i) {
-        err = MPI_Send((void *) polygon[i], game.width, MPI_INT, 0, 1, mpi.managerComm);
+    for (i = 0; i < game.size.height; ++i) {
+        err = MPI_Send((void *) game.polygon[i], game.size.width, MPI_INT, manager.rank, manager.tag, manager.comm);
         CrashIfError(err, "MPI_Send");
     }
 
-    printf("polygon\n");
-
     int message;
-    Send(SNAPSHOT, &mpi);
-    for (i = 0 ; i < game.height; ++i) {
-        err = MPI_Recv((void *) polygon[i], game.width, MPI_INT, 0, 1, mpi.managerComm, &mpiStatus);
+    Send(SNAPSHOT, &manager);
+    for (i = 0 ; i < game.size.height; ++i) {
+        err = MPI_Recv((void *) game.polygon[i], game.size.width, MPI_INT, manager.rank, manager.tag, manager.comm, &mpiStatus);
         CrashIfError(err, "MPI_Recv");
     }
 
-    printf("snapshot\n");
+    printf("Snapshot:\n");
+    PrintPolygon((const int **) game.polygon, game.size.height, game.size.width);
 
     message = STOP;
-    err = MPI_Send((void *) &message, 1, MPI_INT, 0, 1, mpi.managerComm);
+    err = MPI_Send((void *) &message, 1, MPI_INT, manager.rank, manager.tag, manager.comm);
     CrashIfError(err, "MPI_Send");
 
     printf("Recieved comm\n");
     MPI_Finalize();
+
+    for (i = 0; i < game.size.height; ++i) {
+        free(game.polygon[i]);
+    }
+    free(game.polygon);
+
     return 0;
 }

@@ -2,27 +2,19 @@
 #include "mpi.h"
 
 #include "error.h"
+#include "life_game.h"
 
 typedef struct {
     int numOfWorkers;
-    MPI_Comm workersComm;
-    MPI_Comm clientComm;
-    int clientRank;
-    int clientTag;
+    CommunicationConstants client;
+    CommunicationConstants manager;
 } Routine;
 
 static const int maxConnections = 5;
-
-void fillClientInfo(Routine *routine, const MPI_Status *status) {
-    routine->clientRank = status->MPI_SOURCE;
-    routine->clientTag  = status->MPI_TAG;
-}
+static const char *workerProgram = "worker";
 
 int main(int argc, char *argv[]) 
 { 
-    int worldSize = 0;
-    char *workerProgram = "worker";
-
     MPI_Status mpiStatus;
 
     int err;
@@ -33,6 +25,7 @@ int main(int argc, char *argv[])
     err = MPI_Init(&argc, &argv);
     CrashIfError(err, "MPI_Init");
 
+    int worldSize = 0;
     err = MPI_Comm_size(MPI_COMM_WORLD, &worldSize); 
     CrashIfError(err, "MPI_Comm_size");
     Assert(worldSize == 1, "Too many servers");
@@ -46,25 +39,26 @@ int main(int argc, char *argv[])
 
     while (1) {
         if (connections < maxConnections) {
-            err = MPI_Comm_accept(mpiPort, MPI_INFO_NULL, 0, MPI_COMM_SELF, &(routines[connections].clientComm)); 
+            err = MPI_Comm_accept(mpiPort, MPI_INFO_NULL, 0, MPI_COMM_SELF, &(routines[connections].client.comm)); 
             CrashIfError(err, "MPI_Comm_accept");
             printf("Accepted connection\n");
 
             err = MPI_Recv(&(routines[connections].numOfWorkers), 1, MPI_INT,  
-                MPI_ANY_SOURCE, MPI_ANY_TAG, routines[connections].clientComm, &mpiStatus);
+                MPI_ANY_SOURCE, MPI_ANY_TAG, routines[connections].client.comm, &mpiStatus);
             CrashIfError(err, "MPI_Recv");
-            fillClientInfo(&(routines[connections]), &mpiStatus);
+            FillCommunicationConstants(&(routines[connections].client), &mpiStatus);
 
             err = MPI_Comm_spawn(workerProgram, MPI_ARGV_NULL, routines[connections].numOfWorkers + 1,  
-                MPI_INFO_NULL, 0, MPI_COMM_SELF, &(routines[connections].workersComm), MPI_ERRCODES_IGNORE);
+                MPI_INFO_NULL, 0, MPI_COMM_SELF, &(routines[connections].manager.comm), MPI_ERRCODES_IGNORE);
             CrashIfError(err, "MPI_Comm_spawn");
 
             err = MPI_Recv(managerPort, MPI_MAX_PORT_NAME, MPI_CHAR,  
-                0, MPI_ANY_TAG, routines[connections].workersComm, &mpiStatus);
+                MPI_ANY_SOURCE, MPI_ANY_TAG, routines[connections].manager.comm, &mpiStatus);
             CrashIfError(err, "MPI_Recv");
+            FillCommunicationConstants(&(routines[connections].manager), &mpiStatus);
 
             err = MPI_Send((void *) managerPort, MPI_MAX_PORT_NAME, MPI_CHAR, 
-                routines[connections].clientRank, routines[connections].clientTag, routines[connections].clientComm);
+                routines[connections].client.rank, routines[connections].client.tag, routines[connections].client.comm);
             CrashIfError(err, "MPI_Send");
 
             ++connections;
