@@ -1,3 +1,6 @@
+#ifndef LIFE_ERROR
+#define LIFE_ERROR
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <errno.h>
@@ -12,3 +15,5 @@ void CrashIfError(int status, const char * description) {
 void Assert(int statement, const char * description) {
 	CrashIfError(!statement, description);
 }
+
+#endif

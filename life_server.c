@@ -2,84 +2,76 @@
 #include "mpi.h"
 
 #include "error.h"
-#include "worker_settings.h"
-
-#define WIDTH 5
-#define HEIGHT 5
 
 typedef struct {
     int numOfWorkers;
     MPI_Comm workersComm;
-    int height;
-    int width;
-} Settings;
+    MPI_Comm clientComm;
+    int clientRank;
+    int clientTag;
+} Routine;
 
-void InitSettings(Settings *settings) {
-    settings->numOfWorkers = 2;
-    settings->height = HEIGHT;
-    settings->width = WIDTH;
-}
+static const int maxConnections = 5;
 
-void Send(int message, Settings* settings) {
-    int err = MPI_Send((void *) &message, 1, MPI_INT, 0, 1, settings->workersComm);
-    CrashIfError(err, "MPI_Send");
+void fillClientInfo(Routine *routine, const MPI_Status *status) {
+    routine->clientRank = status->MPI_SOURCE;
+    routine->clientTag  = status->MPI_TAG;
 }
 
 int main(int argc, char *argv[]) 
 { 
-    int polygon [HEIGHT][WIDTH] = {
-        {1, 1, 0, 0, 0}, 
-        {1, 0, 0, 0, 0}, 
-        {1, 0, 1, 1, 1}, 
-        {0, 0, 0, 1, 0}, 
-        {0, 0, 0, 0, 0}
-    };
-
     int worldSize = 0;
     char *workerProgram = "worker";
-    
-    Settings settings;
-    InitSettings(&settings);
 
     MPI_Status mpiStatus;
 
-    int i, err;
+    int err;
+
+    char mpiPort[MPI_MAX_PORT_NAME];
+    char managerPort[MPI_MAX_PORT_NAME];
 
     err = MPI_Init(&argc, &argv);
     CrashIfError(err, "MPI_Init");
 
-    MPI_Comm_size(MPI_COMM_WORLD, &worldSize); 
-    Assert(worldSize == 1, "Too many managers");
+    err = MPI_Comm_size(MPI_COMM_WORLD, &worldSize); 
+    CrashIfError(err, "MPI_Comm_size");
+    Assert(worldSize == 1, "Too many servers");
 
-    MPI_Comm_spawn(workerProgram, MPI_ARGV_NULL, settings.numOfWorkers + 1,  
-             MPI_INFO_NULL, 0, MPI_COMM_SELF, &(settings.workersComm), MPI_ERRCODES_IGNORE);
+    err = MPI_Open_port(MPI_INFO_NULL, mpiPort); 
+    CrashIfError(err, "MPI_Open_port");
+    printf("port name is: %s\n", mpiPort); 
 
+    Routine routines [maxConnections];
+    int connections = 0;
 
-    WorkerSettings workerSettings = {settings.height, settings.width};
-    err = MPI_Send((void *) &workerSettings, 2, MPI_INT, 0, 1, settings.workersComm);
-    CrashIfError(err, "MPI_Send");
+    while (1) {
+        if (connections < maxConnections) {
+            err = MPI_Comm_accept(mpiPort, MPI_INFO_NULL, 0, MPI_COMM_SELF, &(routines[connections].clientComm)); 
+            CrashIfError(err, "MPI_Comm_accept");
+            printf("Accepted connection\n");
 
-    for (i = 0; i < workerSettings.height; ++i) {
-        err = MPI_Send((void *) polygon[i], settings.width, MPI_INT, 0, 1, settings.workersComm);
-        CrashIfError(err, "MPI_Send");
+            err = MPI_Recv(&(routines[connections].numOfWorkers), 1, MPI_INT,  
+                MPI_ANY_SOURCE, MPI_ANY_TAG, routines[connections].clientComm, &mpiStatus);
+            CrashIfError(err, "MPI_Recv");
+            fillClientInfo(&(routines[connections]), &mpiStatus);
+
+            err = MPI_Comm_spawn(workerProgram, MPI_ARGV_NULL, routines[connections].numOfWorkers + 1,  
+                MPI_INFO_NULL, 0, MPI_COMM_SELF, &(routines[connections].workersComm), MPI_ERRCODES_IGNORE);
+            CrashIfError(err, "MPI_Comm_spawn");
+
+            err = MPI_Recv(managerPort, MPI_MAX_PORT_NAME, MPI_CHAR,  
+                0, MPI_ANY_TAG, routines[connections].workersComm, &mpiStatus);
+            CrashIfError(err, "MPI_Recv");
+
+            err = MPI_Send((void *) managerPort, MPI_MAX_PORT_NAME, MPI_CHAR, 
+                routines[connections].clientRank, routines[connections].clientTag, routines[connections].clientComm);
+            CrashIfError(err, "MPI_Send");
+
+            ++connections;
+        }
     }
-    
 
-    int message;
-    Send(SNAPSHOT, &settings);
-    for (i = 0 ; i < settings.height; ++i) {
-        err = MPI_Recv((void *) polygon[i], settings.width, MPI_INT, 0, 1, settings.workersComm, &mpiStatus);
-        CrashIfError(err, "MPI_Recv");
-    }
-
-    message = STOP;
-    err = MPI_Send((void *) &message, 1, MPI_INT, 0, 1, settings.workersComm);
-    CrashIfError(err, "MPI_Send");
-
-
-
-
-    printf("Server stops working\n");
+    printf("Life server stops working\n");
     MPI_Finalize(); 
     return 0; 
 } 

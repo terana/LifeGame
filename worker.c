@@ -4,9 +4,13 @@
 
 typedef struct {
     MPI_Comm serverComm;
+    MPI_Comm clientComm;
+    char port[MPI_MAX_PORT_NAME];
     int serverSize;
     int serverRank;
     int numOfWorkers;
+    int clientRank;
+    int clientTag;
 } ManagerConstants;
 
 typedef struct {
@@ -15,7 +19,6 @@ typedef struct {
     int nextRank;
     int managerRank;
 } RankConstants;
-
 
 void GetManagerConstants(ManagerConstants* mpi) {
     int err;
@@ -32,6 +35,21 @@ void GetManagerConstants(ManagerConstants* mpi) {
     err = MPI_Comm_size(MPI_COMM_WORLD, &mpi->numOfWorkers);
     CrashIfError(err,  "MPI_Comm_size");
     --(mpi->numOfWorkers);
+
+    err = MPI_Open_port(MPI_INFO_NULL, mpi->port); 
+    CrashIfError(err, "MPI_Open_port");
+
+    err = MPI_Send((void *) mpi->port, MPI_MAX_PORT_NAME, MPI_CHAR, 0, 1, mpi->serverComm);
+    CrashIfError(err, "MPI_Send");
+
+    err = MPI_Comm_accept(mpi->port, MPI_INFO_NULL, 0, MPI_COMM_SELF, &(mpi->clientComm)); 
+    CrashIfError(err, "MPI_Comm_accept");
+    printf("Manager accepted connection\n");
+}
+
+void fillClientInfo(ManagerConstants *mpi, const MPI_Status *status) {
+    mpi->clientRank = status->MPI_SOURCE;
+    mpi->clientTag  = status->MPI_TAG;
 }
 
 void GetRankConstants(RankConstants* mpi) {
@@ -191,7 +209,6 @@ void WorkerRoutine(RankConstants *rankConst) {
 
 void ManagerRoutine() {
     int i, err;
-    WorkerSettings settings;
 
     int workerMsg, serverMsg;
     int continueFlag = 1;
@@ -203,15 +220,17 @@ void ManagerRoutine() {
 
     GetManagerConstants(&mpi);
 
-    err = MPI_Recv((void *) &settings, 2, MPI_INT, mpi.serverRank, 1, mpi.serverComm, &mpiStatus);
+    WorkerSettings settings;
+    err = MPI_Recv((void *) &settings, 2, MPI_INT, mpi.serverRank, 1, mpi.clientComm, &mpiStatus);
     CrashIfError(err, "MPI_Recv");
+    fillClientInfo(&mpi, &mpiStatus);
 
     int **polygon = (int **) malloc((settings.height + 2) * sizeof(int *));
     polygon[0] = calloc(settings.width, sizeof(int));
     for (i = 1 ; i < settings.height + 1; ++i) {
         polygon[i] = malloc(settings.width * sizeof(int));
 
-        err = MPI_Recv((void *) polygon[i], settings.width, MPI_INT, mpi.serverRank, 1, mpi.serverComm, &mpiStatus);
+        err = MPI_Recv((void *) polygon[i], settings.width, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, mpi.clientComm, &mpiStatus);
         CrashIfError(err, "MPI_Recv");
     }
     polygon[settings.height + 1] = calloc(settings.width, sizeof(int));
@@ -237,7 +256,7 @@ void ManagerRoutine() {
         }
     }
 
-    err = MPI_Irecv((void*) &serverMsg, 1, MPI_INT, mpi.serverRank, 1, mpi.serverComm, &mpiRequest);
+    err = MPI_Irecv((void*) &serverMsg, 1, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, mpi.clientComm, &mpiRequest);
     CrashIfError(err, "MPI_Irecv");
 
     while (continueFlag) {
@@ -275,7 +294,7 @@ void ManagerRoutine() {
                     PrintPolygon((const int **)polygon, settings.height, settings.width);
 
                     for (i = 1; i < settings.height + 1; ++i) {
-                        err = MPI_Send((void *) polygon[i], settings.width, MPI_INT, mpi.serverRank, 1, mpi.serverComm);
+                        err = MPI_Send((void *) polygon[i], settings.width, MPI_INT, mpi.clientRank, mpi.clientTag, mpi.clientComm);
                         CrashIfError(err, "MPI_Send");
                     }
                     break;
@@ -284,7 +303,7 @@ void ManagerRoutine() {
                     err = MPI_Bcast((void*) &workerMsg, 1, MPI_INT, 0, MPI_COMM_WORLD);
                     CrashIfError(1, "Unrecognised command");
             }
-            err = MPI_Irecv((void*) &serverMsg, 1, MPI_INT, mpi.serverRank, 1, mpi.serverComm, &mpiRequest);
+            err = MPI_Irecv((void*) &serverMsg, 1, MPI_INT, MPI_ANY_SOURCE, MPI_ANY_TAG, mpi.clientComm, &mpiRequest);
             CrashIfError(err, "MPI_Irecv");
         }
     }

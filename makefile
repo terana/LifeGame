@@ -7,5 +7,8 @@ server: life_server.o
 worker: worker.o
 	$(CC) $(CFLAGS)   $^ -o $@
 
+client: client.o
+	$(CC) $(CFLAGS)  $^ -o $@
+
 clean:
-	rm -f *.o server client worker
+	rm -f *.o server client worker a.out
