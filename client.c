@@ -96,7 +96,6 @@ int main(int argc, char *argv[])
     err = MPI_Send((void *) &message, 1, MPI_INT, manager.rank, manager.tag, manager.comm);
     CrashIfError(err, "MPI_Send");
 
-    printf("Recieved comm\n");
     MPI_Finalize();
 
     for (i = 0; i < game.size.height; ++i) {

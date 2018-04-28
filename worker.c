@@ -160,9 +160,6 @@ void WorkerRoutine(RankConstants *rankConst) {
         Swap(&polygon, &newPolygon);
         ExchangeBorders(rankConst, &size, polygon);
 
-        printf("proc %d\n", rankConst->myRank);
-        PrintPolygon((const int **) polygon, size.height, size.width);
-
         err = MPI_Bcast((void*) &message, 1, MPI_INT, 0, MPI_COMM_WORLD);
         CrashIfError(err, "MPI_Bcast");
 
