@@ -10,7 +10,6 @@ typedef struct {
     CommunicationConstants manager;
 } Routine;
 
-static const int maxConnections = 5;
 static const char *workerProgram = "worker";
 
 int main(int argc, char *argv[]) 
@@ -34,35 +33,34 @@ int main(int argc, char *argv[])
     CrashIfError(err, "MPI_Open_port");
     printf("port name is: %s\n", mpiPort); 
 
-    Routine routines [maxConnections];
+    Routine routine;
     int connections = 0;
 
     while (1) {
-        if (connections < maxConnections) {
-            err = MPI_Comm_accept(mpiPort, MPI_INFO_NULL, 0, MPI_COMM_SELF, &(routines[connections].client.comm)); 
-            CrashIfError(err, "MPI_Comm_accept");
-            printf("Accepted connection\n");
+        
+        err = MPI_Comm_accept(mpiPort, MPI_INFO_NULL, 0, MPI_COMM_SELF, &(routine.client.comm)); 
+        CrashIfError(err, "MPI_Comm_accept");
+        printf("Accepted connection %d\n", ++connections);
 
-            err = MPI_Recv(&(routines[connections].numOfWorkers), 1, MPI_INT,  
-                MPI_ANY_SOURCE, MPI_ANY_TAG, routines[connections].client.comm, &mpiStatus);
-            CrashIfError(err, "MPI_Recv");
-            FillCommunicationConstants(&(routines[connections].client), &mpiStatus);
+        err = MPI_Recv(&(routine.numOfWorkers), 1, MPI_INT,  
+            MPI_ANY_SOURCE, MPI_ANY_TAG, routine.client.comm, &mpiStatus);
+        CrashIfError(err, "MPI_Recv");
+        FillCommunicationConstants(&(routine.client), &mpiStatus);
 
-            err = MPI_Comm_spawn(workerProgram, MPI_ARGV_NULL, routines[connections].numOfWorkers + 1,  
-                MPI_INFO_NULL, 0, MPI_COMM_SELF, &(routines[connections].manager.comm), MPI_ERRCODES_IGNORE);
-            CrashIfError(err, "MPI_Comm_spawn");
+        err = MPI_Comm_spawn(workerProgram, MPI_ARGV_NULL, routine.numOfWorkers + 1,  
+            MPI_INFO_NULL, 0, MPI_COMM_SELF, &(routine.manager.comm), MPI_ERRCODES_IGNORE);
+        CrashIfError(err, "MPI_Comm_spawn");
 
-            err = MPI_Recv(managerPort, MPI_MAX_PORT_NAME, MPI_CHAR,  
-                MPI_ANY_SOURCE, MPI_ANY_TAG, routines[connections].manager.comm, &mpiStatus);
-            CrashIfError(err, "MPI_Recv");
-            FillCommunicationConstants(&(routines[connections].manager), &mpiStatus);
+        err = MPI_Recv(managerPort, MPI_MAX_PORT_NAME, MPI_CHAR,  
+            MPI_ANY_SOURCE, MPI_ANY_TAG, routine.manager.comm, &mpiStatus);
+        CrashIfError(err, "MPI_Recv");
+        FillCommunicationConstants(&(routine.manager), &mpiStatus);
 
-            err = MPI_Send((void *) managerPort, MPI_MAX_PORT_NAME, MPI_CHAR, 
-                routines[connections].client.rank, routines[connections].client.tag, routines[connections].client.comm);
-            CrashIfError(err, "MPI_Send");
+        err = MPI_Send((void *) managerPort, MPI_MAX_PORT_NAME, MPI_CHAR, 
+            routine.client.rank, routine.client.tag, routine.client.comm);
+        CrashIfError(err, "MPI_Send");
 
-            ++connections;
-        }
+        ++connections;    
     }
 
     printf("Life server stops working\n");

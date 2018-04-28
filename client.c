@@ -20,7 +20,7 @@ void Send(int message, CommunicationConstants* mpi) {
 
 void InitSettings(GameSettings *game) {
     memset(game, 0, sizeof(GameSettings));
-    
+
     printf("Enter polygon height and width:\n");
     scanf("%d %d", &(game->size.height), &(game->size.width));
 
