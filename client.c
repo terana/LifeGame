@@ -57,12 +57,19 @@ int main(int argc, char *argv[])
     err = MPI_Init(&argc, &argv);
     CrashIfError(err, "MPI_Init");
 
-    printf("Enter port name: \n");
-    scanf("%s", serverPort);
+    //printf("Enter port name: \n");
+   // scanf("%s", serverPort);
+
+    FILE *serverPortFile = fopen(serverPortFileName, "r");
+    Assert(serverPortFile != NULL, "Can't find server");
+    fscanf(serverPortFile, "%s", serverPort);
+    fclose(serverPortFile);
+
+    printf("Connecting to server..\n");
 
     err = MPI_Comm_connect(serverPort, MPI_INFO_NULL, 0, MPI_COMM_SELF, &server.comm); 
     CrashIfError(err, "MPI_Comm_connect");
-    printf("Connected to server\n");
+    printf("Connection established\n");
 
     err = MPI_Send(&game.numOfWorkers, 1, MPI_INT, server.rank, server.tag, server.comm);
     CrashIfError(err, "MPI_Send");

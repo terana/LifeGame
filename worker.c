@@ -153,8 +153,6 @@ void WorkerRoutine(RankConstants *rankConst) {
         CrashIfError(err, "MPI_Recv");
     }
 
-    PrintPolygon((const int **) polygon, size.height, size.width);
-
     while(continueFlag) {
         CalculateNewPolygon(&size, (const int **) polygon, newPolygon);
         Swap(&polygon, &newPolygon);
@@ -271,7 +269,6 @@ void ManagerRoutine() {
                             CrashIfError(err, "MPI_Recv");
                         }
                     }
-                    PrintPolygon((const int **)polygon, size.height, size.width);
 
                     for (i = 1; i < size.height + 1; ++i) {
                         err = MPI_Send((void *) polygon[i], size.width, MPI_INT, mpi.client.rank, mpi.client.tag, mpi.client.comm);

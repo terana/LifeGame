@@ -3,6 +3,8 @@
 
 #include "mpi.h"
 
+static const char *serverPortFileName = "server_port.txt";
+
 typedef struct {
     int height;
     int width;

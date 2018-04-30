@@ -12,6 +12,13 @@ typedef struct {
 
 static const char *workerProgram = "worker";
 
+void StorePort(const char *port) {
+    FILE *portFile = fopen(serverPortFileName, "w");
+    Assert(portFile != NULL, "Can't open file for storing the port");
+    fprintf(portFile, "%s", port);
+    fclose(portFile);
+}
+
 int main(int argc, char *argv[]) 
 { 
     MPI_Status mpiStatus;
@@ -31,7 +38,9 @@ int main(int argc, char *argv[])
 
     err = MPI_Open_port(MPI_INFO_NULL, mpiPort); 
     CrashIfError(err, "MPI_Open_port");
-    printf("port name is: %s\n", mpiPort); 
+    printf("port name is: %s\n", mpiPort);
+
+    StorePort(mpiPort);
 
     Routine routine;
     int connections = 0;

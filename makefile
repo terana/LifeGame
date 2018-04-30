@@ -11,4 +11,4 @@ client: client.o
 	$(CC) $(CFLAGS)  $^ -o $@
 
 clean:
-	rm -f *.o server client worker a.out
+	rm -f *.o server client worker a.out server_port.txt
